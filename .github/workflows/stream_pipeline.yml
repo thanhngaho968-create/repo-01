@@ -63,6 +63,7 @@ jobs:
 
       - name: Execute Stream Processor
         env:
+          GDRIVE_OAUTH_BASE64: ${{ secrets.GDRIVE_OAUTH_BASE64 }}
           GDRIVE_SA_BASE64: ${{ secrets.GDRIVE_SA_BASE64 }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
           CF_RELAY_URL: ${{ secrets.CF_RELAY_URL }}

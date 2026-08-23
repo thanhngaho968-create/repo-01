@@ -55,6 +55,46 @@ def get_drive_service():
     if _drive_service is not None:
         return _drive_service
 
+    # 1. Primary: User OAuth2 (Consumes from personal 5TB quota, no storageQuotaExceeded error)
+    oauth_info = None
+    oauth_b64 = os.environ.get("GDRIVE_OAUTH_BASE64", "").strip()
+    if oauth_b64:
+        try:
+            missing_padding = len(oauth_b64) % 4
+            if missing_padding:
+                oauth_b64 += '=' * (4 - missing_padding)
+            oauth_info = json.loads(base64.b64decode(oauth_b64).decode("utf-8"))
+        except Exception as e:
+            logger.warning(f"Failed to decode GDRIVE_OAUTH_BASE64: {e}")
+
+    if not oauth_info:
+        for path in ["user_oauth2.json", "/media/vpsg16gb/HaRiDisk/Telegram_Command_Center/user_oauth2.json"]:
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        oauth_info = json.load(f)
+                    break
+                except Exception:
+                    pass
+
+    if oauth_info and oauth_info.get("refresh_token"):
+        try:
+            from google.oauth2.credentials import Credentials
+            logger.info("🔑 Authenticating Google Drive with User OAuth2 (5TB Direct Storage)...")
+            creds = Credentials(
+                None,
+                refresh_token=oauth_info["refresh_token"],
+                token_uri=oauth_info.get("token_uri", "https://oauth2.googleapis.com/token"),
+                client_id=oauth_info["client_id"],
+                client_secret=oauth_info["client_secret"],
+                scopes=oauth_info.get("scopes", SCOPES)
+            )
+            _drive_service = build("drive", "v3", credentials=creds)
+            return _drive_service
+        except Exception as oe:
+            logger.warning(f"OAuth2 credentials build failed, falling back to Service Account: {oe}")
+
+    # 2. Secondary Fallback: Service Account
     sa_info = None
     sa_b64 = os.environ.get("GDRIVE_SA_BASE64", "").strip()
     if sa_b64:
@@ -88,7 +128,7 @@ def get_drive_service():
                     logger.warning(f"Failed to load {path}: {e}")
 
     if not sa_info:
-        raise ValueError("Missing Google Drive Service Account credentials (GDRIVE_SA_BASE64 or service_account.json)")
+        raise ValueError("Missing Google Drive credentials (GDRIVE_OAUTH_BASE64 or GDRIVE_SA_BASE64)")
 
     creds = service_account.Credentials.from_service_account_info(
         sa_info,
