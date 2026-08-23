@@ -252,13 +252,28 @@ def get_stream_m3u8_url(embed_url):
     stream_api_url = f"https://javplayer.cc/stream?id={hash_id}"
     req_headers = {
         'User-Agent': HEADERS['User-Agent'],
-        'Referer': embed_url if embed_url.startswith("http") else f"https://javplayer.cc/e/{hash_id}"
+        'Referer': embed_url if embed_url.startswith("http") else f"https://javplayer.cc/e/{hash_id}",
+        'X-Requested-With': 'XMLHttpRequest',
+        'Accept': 'application/json, text/javascript, */*; q=0.01'
     }
+
+    if cloudscraper:
+        try:
+            scraper = cloudscraper.create_scraper(browser={"browser": "chrome", "platform": "windows", "desktop": True})
+            r = scraper.get(stream_api_url, headers=req_headers, timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                stream_url = data.get("media", {}).get("stream") or data.get("url")
+                if stream_url:
+                    return stream_url
+        except Exception as ce:
+            logger.warning(f"cloudscraper failed for stream api: {ce}")
+
     try:
         r = requests.get(stream_api_url, headers=req_headers, timeout=15)
         if r.status_code == 200:
             data = r.json()
-            stream_url = data.get("media", {}).get("stream")
+            stream_url = data.get("media", {}).get("stream") or data.get("url")
             if stream_url:
                 return stream_url
     except Exception as e:
@@ -513,12 +528,13 @@ def main():
     title = data.get("title", TASK_ID)
     code = data.get("code", "")
     target_url = data.get("url", "")
+    m3u8_url = data.get("m3u8_url", "")
     chat_id = data.get("chat_id", "")
     post_id = data.get("post_id", "")
     folder_id = data.get("folder_id", DRIVE_ROOT)
     owner_email = data.get("owner_email", DEFAULT_OWNER_EMAIL)
 
-    if not target_url:
+    if not target_url and not m3u8_url:
         logger.error("⚠️ No stream URL or page URL provided. Exiting gracefully.")
         return
 
@@ -527,8 +543,17 @@ def main():
 
     episodes_to_process = []
 
-    # Check if target_url is 123av / missav page
-    if is_123av_url(target_url) and "/e/" not in target_url and not target_url.endswith(".m3u8"):
+    # 1. Prioritize direct m3u8_url if provided
+    if m3u8_url:
+        logger.info(f"🔗 Using provided direct stream URL: {m3u8_url[:80]}...")
+        episodes_to_process.append({
+            "name": "1",
+            "number": 1,
+            "stream_url": m3u8_url
+        })
+
+    # 2. Check if target_url is 123av / missav page
+    elif is_123av_url(target_url) and "/e/" not in target_url and not target_url.endswith(".m3u8"):
         logger.info(f"🔍 Scraping 123AV details for: {target_url}")
         details = scrape_123av_details(target_url)
         if not details.get("error"):
@@ -547,8 +572,8 @@ def main():
         else:
             logger.warning(f"⚠️ Scraping failed: {details.get('error')}")
 
-    # If javplayer embed URL
-    if not episodes_to_process and "/e/" in target_url:
+    # 3. If javplayer embed URL
+    if not episodes_to_process and target_url and "/e/" in target_url:
         resolved_m3u8 = get_stream_m3u8_url(target_url)
         if resolved_m3u8:
             episodes_to_process.append({
@@ -557,8 +582,8 @@ def main():
                 "stream_url": resolved_m3u8
             })
 
-    # If direct m3u8 or mp4
-    if not episodes_to_process:
+    # 4. Fallback: if direct m3u8 or mp4 in target_url
+    if not episodes_to_process and target_url:
         episodes_to_process.append({
             "name": "1",
             "number": 1,
