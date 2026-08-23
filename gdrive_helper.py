@@ -110,7 +110,12 @@ def get_or_create_folder(folder_name, parent_id=None, owner_email=DEFAULT_OWNER_
         else:
             query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
             
-        res = service.files().list(q=query, fields="files(id, name, webViewLink)").execute()
+        res = service.files().list(
+            q=query,
+            fields="files(id, name, webViewLink)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
+        ).execute()
         files = res.get("files", [])
         if files:
             folder_id = files[0]["id"]
@@ -123,7 +128,7 @@ def get_or_create_folder(folder_name, parent_id=None, owner_email=DEFAULT_OWNER_
         if parent_id:
             meta["parents"] = [parent_id]
 
-        folder = service.files().create(body=meta, fields="id, webViewLink").execute()
+        folder = service.files().create(body=meta, fields="id, webViewLink", supportsAllDrives=True).execute()
         folder_id = folder["id"]
 
         if owner_email:
@@ -131,7 +136,8 @@ def get_or_create_folder(folder_name, parent_id=None, owner_email=DEFAULT_OWNER_
                 service.permissions().create(
                     fileId=folder_id,
                     body={"type": "user", "role": "writer", "emailAddress": owner_email},
-                    sendNotificationEmail=False
+                    sendNotificationEmail=False,
+                    supportsAllDrives=True
                 ).execute()
                 logger.info(f"Granted writer permission for folder '{folder_name}' to {owner_email}")
             except Exception as pe:
@@ -186,7 +192,8 @@ def upload_file_to_drive(local_path, file_name, parent_folder_id=None, mime_type
         file_obj = service.files().create(
             body=meta,
             media_body=media,
-            fields="id, name, webViewLink, webContentLink"
+            fields="id, name, webViewLink, webContentLink",
+            supportsAllDrives=True
         ).execute()
 
         file_id = file_obj["id"]
@@ -199,7 +206,8 @@ def upload_file_to_drive(local_path, file_name, parent_folder_id=None, mime_type
                 service.permissions().create(
                     fileId=file_id,
                     body={"type": "user", "role": "writer", "emailAddress": target_email},
-                    sendNotificationEmail=False
+                    sendNotificationEmail=False,
+                    supportsAllDrives=True
                 ).execute()
                 logger.info(f"Granted writer access for '{file_name}' to {target_email}")
             except Exception as pe:

@@ -27,7 +27,7 @@ TASK_ID = os.environ.get("TASK_ID", "task_stream_001")
 TASK_PAYLOAD = os.environ.get("TASK_PAYLOAD", "")
 DRIVE_ROOT = os.environ.get("GDRIVE_FOLDER_ID", "1AD83FFKXHHc-0NGK4boRv1jCcbUCRJn7")
 DEFAULT_OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "hothihuong113@gmail.com")
-MAX_CHUNK_BYTES = 48 * 1024 * 1024  # 48 MB per video part
+MAX_CHUNK_BYTES = 45 * 1024 * 1024  # 45 MB per video part (Strictly <= 50MB for Telegram API)
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
