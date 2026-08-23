@@ -342,8 +342,8 @@ def get_video_meta(video_path):
         "-of", "json",
         video_path
     ]
-    res = subprocess.run(cmd, capture_output=True, text=True)
     try:
+        res = subprocess.run(cmd, capture_output=True, text=True)
         data = json.loads(res.stdout)
         streams = data.get("streams", [{}])[0]
         fmt = data.get("format", {})
@@ -356,7 +356,8 @@ def get_video_meta(video_path):
             "height": height,
             "duration": int(duration)
         }
-    except Exception:
+    except Exception as e:
+        logger.warning(f"⚠️ ffprobe probe warning: {e}")
         return {"width": 1280, "height": 720, "duration": 0}
 
 def generate_video_thumb(video_path, thumb_path, timestamp=2.0):

@@ -47,8 +47,11 @@ jobs:
             echo "📥 Downloading yt-dlp binary..."
             curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ~/.local/bin/yt-dlp
             chmod +x ~/.local/bin/yt-dlp
-          else
-            echo "⚡ yt-dlp loaded directly from GitHub Actions Cache!"
+          fi
+          if ! command -v ffmpeg &> /dev/null; then
+            echo "📥 Installing FFmpeg..."
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg
           fi
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           $HOME/.local/bin/yt-dlp --version || yt-dlp --version
