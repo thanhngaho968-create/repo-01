@@ -268,18 +268,39 @@ def get_stream_m3u8_url(embed_url):
 
 def download_and_merge_m3u8(stream_url, output_mp4, referer="https://javplayer.cc/"):
     """
-    Downloads HLS stream with 16 multi-connection workers via yt-dlp,
-    falling back to FFmpeg with proper headers if needed.
+    Downloads HLS stream with robust FFmpeg stream copy and yt-dlp.
     """
-    logger.info(f"📥 [yt-dlp] Downloading stream to {output_mp4} (16 workers)...")
+    logger.info(f"📥 Downloading stream to {output_mp4}...")
     
-    # 1. Try yt-dlp multi-connection
+    # 1. Primary fast FFmpeg stream copy with full protocol whitelist
+    ffmpeg_cmd = [
+        'ffmpeg', '-y',
+        '-headers', f'Referer: {referer}\r\nUser-Agent: {HEADERS["User-Agent"]}\r\n',
+        '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
+        '-i', stream_url,
+        '-c', 'copy',
+        '-bsf:a', 'aac_adtstoasc',
+        output_mp4
+    ]
+    try:
+        logger.info(f"  Executing FFmpeg stream copy...")
+        res = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+        if res.returncode == 0 and os.path.exists(output_mp4) and os.path.getsize(output_mp4) > 1024 * 100:
+            logger.info(f"✅ FFmpeg download success: {format_bytes(os.path.getsize(output_mp4))}")
+            return True
+        else:
+            logger.warning(f"⚠️ FFmpeg error: {res.stderr[-400:] if res.stderr else 'Failed'}")
+    except Exception as e:
+        logger.warning(f"⚠️ FFmpeg execution exception: {e}")
+
+    # 2. Secondary fallback via yt-dlp
+    logger.info("⚠️ Trying yt-dlp fallback...")
     dl_cmd = [
         'yt-dlp',
         '--add-header', f'Referer: {referer}',
         '--add-header', f'User-Agent: {HEADERS["User-Agent"]}',
-        '--hls-prefer-native',
-        '-N', '16',
+        '--downloader', 'ffmpeg',
+        '--downloader-args', 'ffmpeg:-protocol_whitelist file,http,https,tcp,tls,crypto',
         '-o', output_mp4,
         stream_url
     ]
@@ -289,30 +310,9 @@ def download_and_merge_m3u8(stream_url, output_mp4, referer="https://javplayer.c
             logger.info(f"✅ yt-dlp download success: {format_bytes(os.path.getsize(output_mp4))}")
             return True
         else:
-            logger.warning(f"⚠️ yt-dlp output empty or missing. Error: {res.stderr[-300:] if res.stderr else 'No output'}")
+            logger.error(f"❌ yt-dlp error: {res.stderr[-300:] if res.stderr else 'No output'}")
     except Exception as e:
-        logger.warning(f"⚠️ yt-dlp execution exception: {e}")
-
-    # 2. Fallback to FFmpeg with Referer and User-Agent
-    logger.info("⚠️ Falling back to FFmpeg stream copy...")
-    ffmpeg_cmd = [
-        'ffmpeg', '-y',
-        '-headers', f'Referer: {referer}\r\nUser-Agent: {HEADERS["User-Agent"]}\r\n',
-        '-allowed_segment_extensions', 'ALL',
-        '-i', stream_url,
-        '-c', 'copy',
-        '-bsf:a', 'aac_adtstoasc',
-        output_mp4
-    ]
-    try:
-        res = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
-        if res.returncode == 0 and os.path.exists(output_mp4) and os.path.getsize(output_mp4) > 1024 * 100:
-            logger.info(f"✅ FFmpeg download success: {format_bytes(os.path.getsize(output_mp4))}")
-            return True
-        else:
-            logger.error(f"❌ FFmpeg error: {res.stderr[-400:] if res.stderr else 'Failed'}")
-    except Exception as e:
-        logger.error(f"❌ FFmpeg execution exception: {e}")
+        logger.error(f"❌ yt-dlp exception: {e}")
 
     return False
 
