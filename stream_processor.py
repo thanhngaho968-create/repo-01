@@ -534,8 +534,10 @@ def main():
     folder_id = data.get("folder_id", DRIVE_ROOT)
     owner_email = data.get("owner_email", DEFAULT_OWNER_EMAIL)
 
-    if not target_url and not m3u8_url:
-        logger.error("⚠️ No stream URL or page URL provided. Exiting gracefully.")
+    episodes_raw = data.get("episodes", [])
+
+    if not target_url and not m3u8_url and not episodes_raw:
+        logger.error("⚠️ No stream URL, page URL or episodes provided. Exiting gracefully.")
         return
 
     work_dir = os.path.join("./temp_downloads", f"task_{int(time.time())}")
