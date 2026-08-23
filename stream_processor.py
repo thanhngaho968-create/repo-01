@@ -387,6 +387,39 @@ def download_and_merge_m3u8(stream_url, output_mp4, referer="https://javplayer.c
 
     return False
 
+
+DISCUSS_CHAT_ID = os.environ.get("DISCUSS_CHAT_ID", "-1002087114535")
+
+def get_discussion_thread_id(channel_msg_id):
+    """
+    Finds the thread message_id in the linked discussion supergroup for a channel post.
+    """
+    time.sleep(2)
+    try:
+        ping = telegram_helper.send_message(chat_id=DISCUSS_CHAT_ID, text="🔍 Syncing...")
+        if ping.get("ok"):
+            latest_id = ping["result"]["message_id"]
+            telegram_helper.make_tg_request("deleteMessage", data={"chat_id": DISCUSS_CHAT_ID, "message_id": latest_id})
+
+            for test_id in range(latest_id - 1, max(1, latest_id - 60), -1):
+                chk = telegram_helper.send_message(chat_id=DISCUSS_CHAT_ID, text="✓", reply_to_message_id=test_id)
+                if chk.get("ok"):
+                    rep_msg = chk["result"]
+                    rep_id = rep_msg["message_id"]
+                    telegram_helper.make_tg_request("deleteMessage", data={"chat_id": DISCUSS_CHAT_ID, "message_id": rep_id})
+
+                    reply_to = rep_msg.get("reply_to_message", {})
+                    fwd_id = reply_to.get("forward_from_message_id")
+                    if not fwd_id:
+                        fwd_id = reply_to.get("forward_origin", {}).get("message_id")
+                    if str(fwd_id) == str(channel_msg_id):
+                        logger.info(f"🎯 Resolved Discussion Thread Msg #{test_id} in {DISCUSS_CHAT_ID} for Channel Post #{channel_msg_id}")
+                        return test_id
+                time.sleep(0.3)
+    except Exception as e:
+        logger.warning(f"⚠️ Discussion thread resolution warning: {e}")
+    return channel_msg_id
+
 def get_video_meta(video_path):
     """
     Probes video metadata (duration, width, height) using ffprobe.
@@ -662,10 +695,15 @@ def main():
                     p_res = telegram_helper.send_message(chat_id=chat_id, text=post_caption)
 
                 if p_res.get("ok"):
-                    post_id = str(p_res.get("result", {}).get("message_id"))
-                    logger.info(f"📢 Created Channel Post #{post_id} on {chat_id}")
+                    channel_post_id = str(p_res.get("result", {}).get("message_id"))
+                    logger.info(f"📢 Created Channel Post #{channel_post_id} on {chat_id}")
+                    # STRICT RULE: Video parts MUST ONLY be posted to the Discussion Group (-1002087114535) in the comments topic
+                    disc_thread_id = get_discussion_thread_id(channel_post_id)
+                    chat_id = DISCUSS_CHAT_ID
+                    post_id = str(disc_thread_id)
+                    logger.info(f"🔒 Targeted Discussion Topic: Chat {chat_id}, Thread Msg #{post_id}")
                     if row_index:
-                        update_gsheet_row(row_index, title=title, post_id=post_id, status="In Progress (Downloading)")
+                        update_gsheet_row(row_index, title=title, post_id=channel_post_id, status="In Progress (Downloading)")
 
             eps = details.get("episodes", [])
             for ep in eps:
