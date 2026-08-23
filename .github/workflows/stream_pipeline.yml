@@ -32,10 +32,15 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
+          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo chmod a+rx /usr/local/bin/yt-dlp
+          yt-dlp --version
+          ffmpeg -version | head -n 1
 
       - name: Install Python Dependencies
         run: |
-          pip install requests google-api-python-client google-auth gspread
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Execute Stream Processor
         env:

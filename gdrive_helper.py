@@ -2,63 +2,209 @@ import os
 import io
 import json
 import base64
+import time
+import random
 import logging
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+DEFAULT_OWNER_EMAIL = "hothihuong113@gmail.com"
+DEFAULT_DRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID", "1AD83FFKXHHc-0NGK4boRv1jCcbUCRJn7")
+SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+_drive_service = None
+
+def retry_on_429(func, *args, max_retries=5, backoff_factor=2, **kwargs):
+    """
+    Executes a function and retries with exponential backoff if a 429/quota error occurs.
+    """
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            err_msg = str(e)
+            is_transient = False
+            
+            if "429" in err_msg or "quota" in err_msg.lower() or "limit" in err_msg.lower() or "ratelimit" in err_msg.lower():
+                is_transient = True
+            if hasattr(e, 'resp') and getattr(e.resp, 'status', None) in [429, 500, 502, 503, 504]:
+                is_transient = True
+            elif hasattr(e, 'response') and getattr(e.response, 'status_code', None) in [429, 500, 502, 503, 504]:
+                is_transient = True
+
+            if is_transient and attempt < max_retries - 1:
+                sleep_time = (backoff_factor ** attempt) + random.uniform(1.0, 3.0)
+                logger.warning(
+                    f"⚠️ Google API transient/quota error: {err_msg[:100]}. "
+                    f"Retrying in {sleep_time:.2f}s... (Attempt {attempt+1}/{max_retries})"
+                )
+                time.sleep(sleep_time)
+            else:
+                raise
 
 def get_drive_service():
-    sa_b64 = os.environ.get("GDRIVE_SA_BASE64", "")
-    if not sa_b64:
-        raise ValueError("Missing GDRIVE_SA_BASE64 environment variable")
-    sa_json = base64.b64decode(sa_b64).decode("utf-8")
-    sa_info = json.loads(sa_json)
-    
+    """
+    Initializes and returns an authenticated Google Drive v3 service.
+    Supports GDRIVE_SA_BASE64 env var, GDRIVE_SA_JSON env var, or local service_account.json.
+    """
+    global _drive_service
+    if _drive_service is not None:
+        return _drive_service
+
+    sa_info = None
+    sa_b64 = os.environ.get("GDRIVE_SA_BASE64", "").strip()
+    if sa_b64:
+        try:
+            # Handle potential padding issues
+            missing_padding = len(sa_b64) % 4
+            if missing_padding:
+                sa_b64 += '=' * (4 - missing_padding)
+            sa_json = base64.b64decode(sa_b64).decode("utf-8")
+            sa_info = json.loads(sa_json)
+        except Exception as e:
+            logger.warning(f"Failed to decode GDRIVE_SA_BASE64: {e}")
+
+    if not sa_info:
+        sa_raw = os.environ.get("GDRIVE_SA_JSON", "").strip()
+        if sa_raw:
+            try:
+                sa_info = json.loads(sa_raw)
+            except Exception as e:
+                logger.warning(f"Failed to parse GDRIVE_SA_JSON: {e}")
+
+    if not sa_info:
+        # Check standard local paths
+        for path in ["service_account.json", "/media/vpsg16gb/HaRiDisk/Telegram_Command_Center/service_account.json"]:
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        sa_info = json.load(f)
+                    break
+                except Exception as e:
+                    logger.warning(f"Failed to load {path}: {e}")
+
+    if not sa_info:
+        raise ValueError("Missing Google Drive Service Account credentials (GDRIVE_SA_BASE64 or service_account.json)")
+
     creds = service_account.Credentials.from_service_account_info(
         sa_info,
-        scopes=["https://www.googleapis.com/auth/drive"]
+        scopes=SCOPES
     )
-    return build("drive", "v3", credentials=creds)
+    _drive_service = build("drive", "v3", credentials=creds)
+    return _drive_service
 
-def get_or_create_folder(folder_name, parent_id):
+def get_or_create_folder(folder_name, parent_id=None, owner_email=DEFAULT_OWNER_EMAIL):
+    """
+    Finds existing folder by name (and optional parent) or creates a new one.
+    Shares the folder with owner_email if specified.
+    """
     service = get_drive_service()
-    query = f"name = '{folder_name}' and '{parent_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-    res = service.files().list(q=query, fields="files(id, name)").execute()
-    files = res.get("files", [])
-    if files:
-        return files[0]["id"]
     
-    meta = {
-        "name": folder_name,
-        "mimeType": "application/vnd.google-apps.folder",
-        "parents": [parent_id]
-    }
-    folder = service.files().create(body=meta, fields="id").execute()
-    return folder["id"]
+    def _run():
+        if parent_id:
+            query = f"name = '{folder_name}' and '{parent_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        else:
+            query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+            
+        res = service.files().list(q=query, fields="files(id, name, webViewLink)").execute()
+        files = res.get("files", [])
+        if files:
+            folder_id = files[0]["id"]
+            return folder_id, files[0].get("webViewLink", f"https://drive.google.com/drive/folders/{folder_id}")
 
-def upload_file_to_drive(local_path, file_name, parent_folder_id, mime_type="application/octet-stream", owner_email=None):
+        meta = {
+            "name": folder_name,
+            "mimeType": "application/vnd.google-apps.folder"
+        }
+        if parent_id:
+            meta["parents"] = [parent_id]
+
+        folder = service.files().create(body=meta, fields="id, webViewLink").execute()
+        folder_id = folder["id"]
+
+        if owner_email:
+            try:
+                service.permissions().create(
+                    fileId=folder_id,
+                    body={"type": "user", "role": "writer", "emailAddress": owner_email},
+                    sendNotificationEmail=False
+                ).execute()
+                logger.info(f"Granted writer permission for folder '{folder_name}' to {owner_email}")
+            except Exception as pe:
+                logger.warning(f"Could not share folder with {owner_email}: {pe}")
+
+        folder_url = folder.get("webViewLink", f"https://drive.google.com/drive/folders/{folder_id}")
+        return folder_id, folder_url
+
+    return retry_on_429(_run)
+
+def share_file_or_folder(file_id, email=DEFAULT_OWNER_EMAIL, role="writer"):
+    """
+    Shares a file or folder with a specific email address.
+    """
     service = get_drive_service()
-    meta = {
-        "name": file_name,
-        "parents": [parent_folder_id]
-    }
-    media = MediaFileUpload(local_path, mimetype=mime_type, resumable=True)
-    file_obj = service.files().create(
-        body=meta,
-        media_body=media,
-        fields="id, name, webViewLink, webContentLink"
-    ).execute()
-
-    if owner_email:
+    def _run():
+        permission = {
+            "type": "user",
+            "role": role,
+            "emailAddress": email
+        }
         try:
-            service.permissions().create(
-                fileId=file_obj["id"],
-                body={"type": "user", "role": "writer", "emailAddress": owner_email},
+            return service.permissions().create(
+                fileId=file_id,
+                body=permission,
                 sendNotificationEmail=False
             ).execute()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to share {file_id} with {email}: {e}")
+            return None
+    return retry_on_429(_run)
 
-    return file_obj.get("webViewLink", "") or f"https://drive.google.com/file/d/{file_obj['id']}/view"
+def upload_file_to_drive(local_path, file_name, parent_folder_id=None, mime_type="video/mp4", owner_email=DEFAULT_OWNER_EMAIL):
+    """
+    Uploads a local file to Google Drive (with resumable multi-MB chunks) and grants permissions.
+    Returns direct webViewLink (str).
+    """
+    if not os.path.exists(local_path):
+        raise FileNotFoundError(f"Local file not found: {local_path}")
+
+    target_folder = parent_folder_id or DEFAULT_DRIVE_FOLDER_ID
+    service = get_drive_service()
+
+    def _run():
+        meta = {
+            "name": file_name
+        }
+        if target_folder:
+            meta["parents"] = [target_folder]
+
+        media = MediaFileUpload(local_path, mimetype=mime_type, resumable=True, chunksize=10*1024*1024)
+        file_obj = service.files().create(
+            body=meta,
+            media_body=media,
+            fields="id, name, webViewLink, webContentLink"
+        ).execute()
+
+        file_id = file_obj["id"]
+        logger.info(f"✅ Uploaded '{file_name}' to GDrive (ID: {file_id})")
+
+        # Share / grant writer permissions
+        target_email = owner_email or DEFAULT_OWNER_EMAIL
+        if target_email:
+            try:
+                service.permissions().create(
+                    fileId=file_id,
+                    body={"type": "user", "role": "writer", "emailAddress": target_email},
+                    sendNotificationEmail=False
+                ).execute()
+                logger.info(f"Granted writer access for '{file_name}' to {target_email}")
+            except Exception as pe:
+                logger.warning(f"Failed granting permissions to {target_email}: {pe}")
+
+        return file_obj.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view"
+
+    return retry_on_429(_run)
