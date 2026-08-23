@@ -641,28 +641,20 @@ def main():
             code = details.get("code") or code
             # Auto-create Channel Post if not provided
             if not post_id and chat_id:
-                post_caption = f"🎬 <b>{title}</b>
-
-"
+                caption_lines = [f"🎬 <b>{title}</b>"]
                 if code:
-                    post_caption += f"🏷️ <b>Mã phim:</b> <code>{code}</code>
-"
+                    caption_lines.append(f"🏷️ <b>Mã phim:</b> <code>{code}</code>")
                 meta = details.get("metadata", {})
                 if meta.get("Cast"):
-                    post_caption += f"💃 <b>Diễn viên:</b> {meta.get('Cast')}
-"
+                    caption_lines.append(f"💃 <b>Diễn viên:</b> {meta.get('Cast')}")
                 if meta.get("Maker"):
-                    post_caption += f"🏢 <b>Hãng:</b> {meta.get('Maker')}
-"
+                    caption_lines.append(f"🏢 <b>Hãng:</b> {meta.get('Maker')}")
                 if meta.get("Release date"):
-                    post_caption += f"📅 <b>Phát hành:</b> {meta.get('Release date')}
-"
+                    caption_lines.append(f"📅 <b>Phát hành:</b> {meta.get('Release date')}")
                 if meta.get("Genres"):
-                    post_caption += f"🎭 <b>Thể loại:</b> {meta.get('Genres')}
-"
-                post_caption += f"
-📥 <i>Hệ thống đang tải và phát video trực tiếp dưới phần bình luận...</i>"
-
+                    caption_lines.append(f"🎭 <b>Thể loại:</b> {meta.get('Genres')}")
+                caption_lines.append("")
+                post_caption = chr(10).join(caption_lines)
                 cover_url = details.get("cover_url")
                 if cover_url:
                     p_res = telegram_helper.send_photo(chat_id=chat_id, photo_path_or_url=cover_url, caption=post_caption)
