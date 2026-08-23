@@ -410,9 +410,9 @@ def get_discussion_thread_id(channel_msg_id):
 
                     reply_to = rep_msg.get("reply_to_message", {})
                     fwd_id = reply_to.get("forward_from_message_id")
-                    if not fwd_id:
-                        fwd_id = reply_to.get("forward_origin", {}).get("message_id")
-                    if str(fwd_id) == str(channel_msg_id):
+                    if not fwd_id and "forward_origin" in reply_to:
+                        fwd_id = reply_to["forward_origin"].get("message_id")
+                    if fwd_id and str(fwd_id) == str(channel_msg_id):
                         logger.info(f"🎯 Resolved Discussion Thread Msg #{test_id} in {DISCUSS_CHAT_ID} for Channel Post #{channel_msg_id}")
                         return test_id
                 time.sleep(0.3)
