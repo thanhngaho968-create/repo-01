@@ -543,8 +543,22 @@ def main():
 
     episodes_to_process = []
 
-    # 1. Prioritize direct m3u8_url if provided
-    if m3u8_url:
+    # 1. Explicit episodes array in payload
+    raw_eps = data.get("episodes", [])
+    if raw_eps:
+        logger.info(f"📋 Processing {len(raw_eps)} explicit episodes from payload...")
+        for ep in raw_eps:
+            ep_url = ep.get("stream_url") or ep.get("url") or ""
+            resolved_m3u8 = get_stream_m3u8_url(ep_url) if ("/e/" in ep_url and ".m3u8" not in ep_url) else ep_url
+            if resolved_m3u8:
+                episodes_to_process.append({
+                    "name": ep.get("name", str(ep.get("number", 1))),
+                    "number": ep.get("number", 1),
+                    "stream_url": resolved_m3u8
+                })
+
+    # 2. Prioritize direct m3u8_url if provided
+    elif m3u8_url:
         logger.info(f"🔗 Using provided direct stream URL: {m3u8_url[:80]}...")
         episodes_to_process.append({
             "name": "1",
@@ -552,7 +566,7 @@ def main():
             "stream_url": m3u8_url
         })
 
-    # 2. Check if target_url is 123av / missav page
+    # 3. Check if target_url is 123av / missav page
     elif is_123av_url(target_url) and "/e/" not in target_url and not target_url.endswith(".m3u8"):
         logger.info(f"🔍 Scraping 123AV details for: {target_url}")
         details = scrape_123av_details(target_url)
@@ -572,7 +586,7 @@ def main():
         else:
             logger.warning(f"⚠️ Scraping failed: {details.get('error')}")
 
-    # 3. If javplayer embed URL
+    # 4. If javplayer embed URL
     if not episodes_to_process and target_url and "/e/" in target_url:
         resolved_m3u8 = get_stream_m3u8_url(target_url)
         if resolved_m3u8:
@@ -582,7 +596,7 @@ def main():
                 "stream_url": resolved_m3u8
             })
 
-    # 4. Fallback: if direct m3u8 or mp4 in target_url
+    # 5. Fallback: if direct m3u8 or mp4 in target_url
     if not episodes_to_process and target_url:
         episodes_to_process.append({
             "name": "1",
