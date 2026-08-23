@@ -96,7 +96,7 @@ def is_123av_url(url):
     if not url:
         return False
     u_lower = url.lower()
-    return any(d in u_lower for d in ["123av.", "missav.", "javplayer.cc"])
+    return any(d in u_lower for d in ["123av", "missav", "javplayer", "jav"])
 
 def fetch_123av_page(url):
     """
@@ -233,6 +233,62 @@ def scrape_123av_details(video_url):
     except Exception as e:
         logger.error(f"Error scraping 123av details: {e}")
         return {"error": str(e)}
+
+
+def update_gsheet_row(row_index, title=None, post_id=None, drive_link=None, status="Completed"):
+    """
+    Updates Google Sheet Adult_18Plus tab directly from GitHub Actions runner.
+    """
+    if not row_index:
+        return False
+    sheet_id = os.environ.get("GSHEET_QUEUE_ID", "1qCYT9HV99mTkwyjL4EemqLeIGg_rZpKw0wH0yLl1IEQ")
+    sa_b64 = os.environ.get("GDRIVE_SA_BASE64", "")
+    oauth_b64 = os.environ.get("GDRIVE_OAUTH_BASE64", "")
+    try:
+        import gspread
+        from google.oauth2 import service_account
+        from google.oauth2.credentials import Credentials
+
+        creds = None
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        if sa_b64:
+            try:
+                sa_info = json.loads(base64.b64decode(sa_b64).decode("utf-8"))
+                creds = service_account.Credentials.from_service_account_info(sa_info, scopes=scopes)
+            except Exception:
+                pass
+        if not creds and oauth_b64:
+            try:
+                user_info = json.loads(base64.b64decode(oauth_b64).decode("utf-8"))
+                creds = Credentials.from_authorized_user_info(user_info, scopes=scopes)
+            except Exception:
+                pass
+
+        if not creds:
+            logger.warning("⚠️ No Google Sheet credentials available.")
+            return False
+
+        gc = gspread.authorize(creds)
+        sh = gc.open_by_key(sheet_id)
+        ws = sh.worksheet("Adult_18Plus")
+
+        if title:
+            ws.update_cell(row_index, 4, str(title))
+        if status:
+            ws.update_cell(row_index, 6, str(status))
+        if post_id:
+            ws.update_cell(row_index, 7, str(post_id))
+        if drive_link:
+            ws.update_cell(row_index, 8, str(drive_link))
+
+        logger.info(f"✅ Updated Google Sheet row #{row_index}: status={status}, post_id={post_id}")
+        return True
+    except Exception as e:
+        logger.warning(f"⚠️ GSheet update warning: {e}")
+        return False
 
 def get_stream_m3u8_url(embed_url):
     """
@@ -535,6 +591,13 @@ def main():
     folder_id = data.get("folder_id", DRIVE_ROOT)
     owner_email = data.get("owner_email", DEFAULT_OWNER_EMAIL)
 
+    row_index = data.get("row_index")
+    if not chat_id:
+        chat_id = os.environ.get("TARGET_CHANNEL_ID", "-1002244827586")
+
+    if row_index:
+        update_gsheet_row(row_index, status="In Progress (Cloud Runner)")
+
     episodes_raw = data.get("episodes", [])
 
     if not target_url and not m3u8_url and not episodes_raw:
@@ -576,6 +639,42 @@ def main():
         if not details.get("error"):
             title = details.get("title") or title
             code = details.get("code") or code
+            # Auto-create Channel Post if not provided
+            if not post_id and chat_id:
+                post_caption = f"🎬 <b>{title}</b>
+
+"
+                if code:
+                    post_caption += f"🏷️ <b>Mã phim:</b> <code>{code}</code>
+"
+                meta = details.get("metadata", {})
+                if meta.get("Cast"):
+                    post_caption += f"💃 <b>Diễn viên:</b> {meta.get('Cast')}
+"
+                if meta.get("Maker"):
+                    post_caption += f"🏢 <b>Hãng:</b> {meta.get('Maker')}
+"
+                if meta.get("Release date"):
+                    post_caption += f"📅 <b>Phát hành:</b> {meta.get('Release date')}
+"
+                if meta.get("Genres"):
+                    post_caption += f"🎭 <b>Thể loại:</b> {meta.get('Genres')}
+"
+                post_caption += f"
+📥 <i>Hệ thống đang tải và phát video trực tiếp dưới phần bình luận...</i>"
+
+                cover_url = details.get("cover_url")
+                if cover_url:
+                    p_res = telegram_helper.send_photo(chat_id=chat_id, photo_path_or_url=cover_url, caption=post_caption)
+                else:
+                    p_res = telegram_helper.send_message(chat_id=chat_id, text=post_caption)
+
+                if p_res.get("ok"):
+                    post_id = str(p_res.get("result", {}).get("message_id"))
+                    logger.info(f"📢 Created Channel Post #{post_id} on {chat_id}")
+                    if row_index:
+                        update_gsheet_row(row_index, title=title, post_id=post_id, status="In Progress (Downloading)")
+
             eps = details.get("episodes", [])
             for ep in eps:
                 ep_url = ep.get("url", "")
@@ -646,6 +745,10 @@ def main():
             parse_mode="HTML",
             reply_to_message_id=int(post_id)
         )
+
+    master_link = results[0]["drive_link"] if results else ""
+    if row_index:
+        update_gsheet_row(row_index, title=title, post_id=post_id, drive_link=master_link, status="Completed")
 
     # Cleanup work directory
     shutil.rmtree(work_dir, ignore_errors=True)
