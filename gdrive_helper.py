@@ -99,7 +99,6 @@ def get_drive_service():
     sa_b64 = os.environ.get("GDRIVE_SA_BASE64", "").strip()
     if sa_b64:
         try:
-            # Handle potential padding issues
             missing_padding = len(sa_b64) % 4
             if missing_padding:
                 sa_b64 += '=' * (4 - missing_padding)
@@ -117,7 +116,6 @@ def get_drive_service():
                 logger.warning(f"Failed to parse GDRIVE_SA_JSON: {e}")
 
     if not sa_info:
-        # Check standard local paths
         for path in ["service_account.json", "/media/vpsg16gb/HaRiDisk/Telegram_Command_Center/service_account.json"]:
             if os.path.exists(path):
                 try:
@@ -137,82 +135,10 @@ def get_drive_service():
     _drive_service = build("drive", "v3", credentials=creds)
     return _drive_service
 
-def get_or_create_folder(folder_name, parent_id=None, owner_email=DEFAULT_OWNER_EMAIL):
-    """
-    Finds existing folder by name (and optional parent) or creates a new one.
-    Shares the folder with owner_email if specified.
-    """
-    service = get_drive_service()
-    
-    def _run():
-        if parent_id:
-            query = f"name = '{folder_name}' and '{parent_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-        else:
-            query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-            
-        res = service.files().list(
-            q=query,
-            fields="files(id, name, webViewLink)",
-            supportsAllDrives=True,
-            includeItemsFromAllDrives=True
-        ).execute()
-        files = res.get("files", [])
-        if files:
-            folder_id = files[0]["id"]
-            return folder_id, files[0].get("webViewLink", f"https://drive.google.com/drive/folders/{folder_id}")
-
-        meta = {
-            "name": folder_name,
-            "mimeType": "application/vnd.google-apps.folder"
-        }
-        if parent_id:
-            meta["parents"] = [parent_id]
-
-        folder = service.files().create(body=meta, fields="id, webViewLink", supportsAllDrives=True).execute()
-        folder_id = folder["id"]
-
-        if owner_email:
-            try:
-                service.permissions().create(
-                    fileId=folder_id,
-                    body={"type": "user", "role": "writer", "emailAddress": owner_email},
-                    sendNotificationEmail=False,
-                    supportsAllDrives=True
-                ).execute()
-                logger.info(f"Granted writer permission for folder '{folder_name}' to {owner_email}")
-            except Exception as pe:
-                logger.warning(f"Could not share folder with {owner_email}: {pe}")
-
-        folder_url = folder.get("webViewLink", f"https://drive.google.com/drive/folders/{folder_id}")
-        return folder_id, folder_url
-
-    return retry_on_429(_run)
-
-def share_file_or_folder(file_id, email=DEFAULT_OWNER_EMAIL, role="writer"):
-    """
-    Shares a file or folder with a specific email address.
-    """
-    service = get_drive_service()
-    def _run():
-        permission = {
-            "type": "user",
-            "role": role,
-            "emailAddress": email
-        }
-        try:
-            return service.permissions().create(
-                fileId=file_id,
-                body=permission,
-                sendNotificationEmail=False
-            ).execute()
-        except Exception as e:
-            logger.warning(f"Failed to share {file_id} with {email}: {e}")
-            return None
-    return retry_on_429(_run)
-
 def upload_file_to_drive(local_path, file_name, parent_folder_id=None, mime_type="video/mp4", owner_email=DEFAULT_OWNER_EMAIL):
     """
     Uploads a local file to Google Drive (with resumable multi-MB chunks) and grants permissions.
+    Strictly checks and prevents duplicate uploads in the target folder.
     Returns direct webViewLink (str).
     """
     if not os.path.exists(local_path):
@@ -222,6 +148,31 @@ def upload_file_to_drive(local_path, file_name, parent_folder_id=None, mime_type
     service = get_drive_service()
 
     def _run():
+        # DEDUPLICATION CHECK: Check if file with same name already exists
+        escaped_name = file_name.replace("'", "\\'")
+        q = f"'{target_folder}' in parents and name = '{escaped_name}' and trashed = false"
+        res = service.files().list(
+            q=q,
+            fields="files(id, name, webViewLink, size, trashed)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
+        ).execute()
+        existing_files = res.get("files", [])
+        if existing_files:
+            valid_files = [f for f in existing_files if int(f.get("size", 0)) > 1024 * 100]
+            if valid_files:
+                primary = valid_files[0]
+                logger.info(f"⚡ [DEDUPLICATION SHIELD] File '{file_name}' already exists on GDrive (ID: {primary['id']}). Skipping upload!")
+                # Trash redundant duplicate copies if any
+                if len(valid_files) > 1:
+                    for extra in valid_files[1:]:
+                        try:
+                            service.files().update(fileId=extra["id"], body={"trashed": True}, supportsAllDrives=True).execute()
+                            logger.info(f"🗑️ Cleaned duplicate copy {extra['id']}")
+                        except Exception:
+                            pass
+                return primary.get("webViewLink") or f"https://drive.google.com/file/d/{primary['id']}/view"
+
         meta = {
             "name": file_name
         }
